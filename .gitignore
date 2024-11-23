@@ -6,6 +6,7 @@ instance/*
 !instance/.gitignore
 .webassets-cache
 .env
+genome_proccessing.log
 
 data/
 ### Flask.Python Stack ###

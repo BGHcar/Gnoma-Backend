@@ -1,89 +1,141 @@
-#genome_indexer.py
-
+# genome_indexer.py
+from concurrent.futures import ThreadPoolExecutor
 import pymongo
-from pymongo import UpdateOne
-from concurrent.futures import ProcessPoolExecutor
+from pymongo import UpdateOne, InsertOne
 from dotenv import load_dotenv
 import os
-import time  # Importamos time para medir el tiempo de ejecución
+import time
+from typing import List, Dict, Tuple
+import mmap
 
-# Cargar configuraciones desde el archivo .env
 load_dotenv()
 
-# Obtener parámetros desde el archivo .env
 MONGO_URI = os.getenv("MONGO_URI")
 DATABASE_NAME = os.getenv("DATABASE_NAME")
-NUM_PROCESOS = int(os.getenv("NUM_PROCESOS", 4))  # Valor predeterminado 4 si no está configurado en .env
+BATCH_SIZE = 1000
 
-# Verifica si las variables se cargaron correctamente
-if not MONGO_URI or not DATABASE_NAME:
-    raise ValueError("MONGO_URI o DATABASE_NAME no están definidos en el archivo .env")
-
-# Conexión a MongoDB
-client = pymongo.MongoClient(MONGO_URI)
+client = pymongo.MongoClient(
+    MONGO_URI,
+    maxPoolSize=None,
+    connectTimeoutMS=30000,
+    socketTimeoutMS=None,
+    connect=False,
+)
 db = client[DATABASE_NAME]
-collection = db['genomas']  # Usa el nombre de colección adecuado
+collection = db['genomas']
 
-# Función para procesar cada línea de datos (ajustada para VCF)
-def procesar_linea(linea, nombres_columnas):
-    if linea.startswith('#'):  # Ignorar líneas de encabezado
+def get_header_info(file_path: str) -> Tuple[List[str], Dict[str, int]]:
+    """
+    Extrae la información del encabezado del archivo VCF.
+    Retorna los nombres de las columnas y sus posiciones.
+    """
+    with open(file_path, 'r') as f:
+        for line in f:
+            if line.startswith('#CHROM'):
+                headers = line.strip().split('\t')
+                # Obtener todas las columnas después de FORMAT
+                sample_columns = headers[9:]
+                # Crear un mapeo de nombre de columna a posición, asegurando el formato output_CH
+                column_positions = {}
+                for idx, name in enumerate(sample_columns):
+                    # Reemplazar CS por CH si es necesario
+                    corrected_name = name.replace('output_CS', 'output_CH')
+                    column_positions[corrected_name] = idx + 9
+                return sample_columns, column_positions
+    raise ValueError("No se encontró la línea de encabezado en el archivo VCF")
+
+def process_line(line: str, column_positions: Dict[str, int]) -> Dict:
+    """Procesa una línea del archivo VCF y retorna un documento."""
+    if line.startswith('#'):
         return None
-    datos = linea.strip().split('\t')  # Ajusta el delimitador según tu archivo
-
-    genoma_data = {
-        "CHROM": datos[0],  # Cromosoma
-        "POS": datos[1],    # Posición
-        "ID": datos[2],     # ID
-        "REF": datos[3],    # Referencia
-        "ALT": datos[4],    # Alternativa
-        "QUAL": datos[5],   # Calidad
-        "FILTER": datos[6], # Filtro
-        "INFO": datos[7],   # Información
-    }
+        
+    fields = line.strip().split('\t')
+    if len(fields) < 8:
+        return None
     
-    for i, columna in enumerate(nombres_columnas):
-        if i + 8 < len(datos):
-            genoma_data[columna] = datos[i + 8]
+    try:
+        # Documento base con campos comunes
+        document = {
+            "CHROM": fields[0],
+            "POS": fields[1],
+            "ID": fields[2] if fields[2] != '.' else None,
+            "REF": fields[3],
+            "ALT": fields[4],
+            "QUAL": fields[5],
+            "FILTER": fields[6],
+            "INFO": fields[7]
+        }
+        
+        # Procesar campos de muestra si existen
+        if len(fields) > 8:
+            for sample_name, position in column_positions.items():
+                if position < len(fields):
+                    # Asegurar que usamos el nombre corregido (CH en lugar de CS)
+                    document[sample_name] = fields[position]
+        
+        return document
+        
+    except Exception as e:
+        print(f"Error procesando línea: {e}")
+        print(f"Contenido de la línea: {line}")
+        return None
+
+def bulk_insert_mongo(data: List[Dict]):
+    """Inserta múltiples documentos en MongoDB."""
+    if not data:
+        return
+        
+    operations = [
+        InsertOne(doc) for doc in data
+        if doc is not None
+    ]
     
-    return genoma_data
+    if operations:
+        try:
+            result = collection.bulk_write(operations, ordered=False)
+            print(f"Insertados {result.inserted_count} documentos")
+        except pymongo.errors.BulkWriteError as bwe:
+            print(f"Error de escritura masiva: {bwe.details['writeErrors']}")
+        except Exception as e:
+            print(f"Error durante la inserción masiva: {e}")
 
-# Función para insertar en MongoDB usando operaciones en bloque
-def insertar_en_mongo(datos):
-    operaciones = []
-    for registro in datos:
-        if registro:
-            operaciones.append(UpdateOne(
-                {"POS": registro["POS"]}, 
-                {"$set": registro},
-                upsert=True  
-            ))
-    if operaciones:
-        collection.bulk_write(operaciones)
-
-# Función para leer y procesar el archivo en paralelo
-def leer_archivo_en_paralelo(archivo):
-    with open(archivo, 'r') as f:
-        lineas = f.readlines()
+def process_file_chunk(file_path: str, start_pos: int, chunk_size: int, column_positions: Dict[str, int]):
+    """Procesa un fragmento del archivo."""
+    batch = []
     
-    nombres_columnas = [col for col in lineas[0].strip().split('\t')[8:] if col.startswith('output_CH')]
+    with open(file_path, 'r') as f:
+        mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+        mm.seek(start_pos)
+        
+        try:
+            for _ in range(chunk_size):
+                line = mm.readline().decode('utf-8')
+                if not line:
+                    break
+                    
+                document = process_line(line, column_positions)
+                if document:
+                    batch.append(document)
+                    
+                if len(batch) >= BATCH_SIZE:
+                    bulk_insert_mongo(batch)
+                    batch = []
+            
+            # Insertar registros restantes
+            if batch:
+                bulk_insert_mongo(batch)
+                
+        except Exception as e:
+            print(f"Error procesando fragmento: {e}")
+        finally:
+            mm.close()
 
-    # Comienza a medir el tiempo de ejecución
-    start_time = time.time()
-
-    with ProcessPoolExecutor(max_workers=NUM_PROCESOS) as executor:
-        registros = list(executor.map(lambda linea: procesar_linea(linea, nombres_columnas), lineas[1:]))
-    
-    # Calcula el tiempo transcurrido
-    end_time = time.time()
-    tiempo_ejecucion = end_time - start_time
-
-    insertar_en_mongo(registros)
-
-    print(f"Tiempo de procesamiento: {tiempo_ejecucion:.2f} segundos")
-
-# Función que envuelve el procesamiento de cada línea
-def indexar_genomas(linea):
-    nombres_columnas = [f'output_CH{i}' for i in range(1, 20)]  # Genera los nombres de columna dinámicamente
-    registros = procesar_linea(linea, nombres_columnas)
-    insertar_en_mongo([registros])
-
+def create_indices():
+    """Crea índices para mejor rendimiento en consultas."""
+    try:
+        collection.create_index([("CHROM", pymongo.ASCENDING), ("POS", pymongo.ASCENDING)])
+        collection.create_index("POS")
+        collection.create_index("CHROM")
+        print("Índices creados correctamente")
+    except Exception as e:
+        print(f"Error creando índices: {e}")

@@ -1,35 +1,34 @@
-#server.py
-
-from fastapi import FastAPI, UploadFile, File
+# server.py
+from fastapi import FastAPI, UploadFile, File, BackgroundTasks
 import shutil
 import os
-from process_file import procesar_archivos_con_multiprocessing
+from process_file import process_file_parallel
+import asyncio
 
 app = FastAPI()
 
-# Endpoint para procesar el archivo
-@app.post("/procesar_archivo")
-async def procesar_archivo(file: UploadFile = File(...)):
+@app.post("/process_file")
+async def process_file(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...)
+):
     try:
-        # Directorio donde se guardarán los archivos cargados
         TEMP_DIR = './data'
         os.makedirs(TEMP_DIR, exist_ok=True)
 
-        # Guardar archivo temporalmente
-        archivo_path = os.path.join(TEMP_DIR, file.filename)
-        with open(archivo_path, "wb") as buffer:
+        file_path = os.path.join(TEMP_DIR, file.filename)
+        with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        # Procesar el archivo y subirlo a MongoDB usando multiprocessing
-        procesar_archivos_con_multiprocessing(archivo_path)
+        # Process file in background
+        background_tasks.add_task(process_file_parallel, file_path)
 
-        return {"message": f"Archivo '{file.filename}' procesado y datos subidos a MongoDB."}
+        return {
+            "message": f"File '{file.filename}' upload complete. Processing started in background."
+        }
     except Exception as e:
-        # Captura cualquier excepción y muestra el error
-        return {"error": f"Hubo un error procesando el archivo: {str(e)}"}
-    
+        return {"error": f"Error processing file: {str(e)}"}
 
-# Endpoint de prueba
 @app.get("/")
 async def root():
-    return {"message": "FastAPI servidor funcionando correctamente."}
+    return {"message": "FastAPI server running correctly."}
