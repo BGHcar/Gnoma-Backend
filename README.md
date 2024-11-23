@@ -20,6 +20,7 @@ Primero, clona el repositorio del proyecto en tu máquina local:
 ```bash
 git clone https://github.com/BGHcar/Gnoma-Backend.git
 cd gnoma-backend/app
+```
 
 ### 2. Crear un entorno virtual de Python
 
