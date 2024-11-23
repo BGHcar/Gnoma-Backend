@@ -19,7 +19,7 @@ Asegúrate de tener los siguientes requisitos instalados en tu sistema antes de 
 Primero, clona el repositorio del proyecto en tu máquina local:
 
 ```bash
-git clone https://github.com/tu_usuario/gnoma-backend.git
+git clone https://github.com/BGHcar/Gnoma-Backend.git
 cd gnoma-backend/app
 ```
 
@@ -30,14 +30,14 @@ Para mantener las dependencias organizadas, se recomienda crear un entorno virtu
 #### En Windows:
 
 ```bash
-python -m venv venv
+py -m venv venv
 venv\Scripts\activate
 ```
 
 #### En Linux/MacOS:
 
 ```bash
-python3 -m venv venv
+py -m venv venv
 source venv/bin/activate
 ```
 
