@@ -1,4 +1,3 @@
-```markdown
 # Gnoma-Backend
 
 Este proyecto es un backend para indexar información genética de genomas de uva utilizando MongoDB, Python y Angular. Está diseñado para manejar archivos TXT con información sobre genomas y procesarlos en paralelo para optimizar el rendimiento.
@@ -21,7 +20,6 @@ Primero, clona el repositorio del proyecto en tu máquina local:
 ```bash
 git clone https://github.com/BGHcar/Gnoma-Backend.git
 cd gnoma-backend/app
-```
 
 ### 2. Crear un entorno virtual de Python
 
