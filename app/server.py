@@ -3,9 +3,13 @@ from fastapi import FastAPI, UploadFile, File, BackgroundTasks
 import shutil
 import os
 from process_file import process_file_parallel
+from genome_api import app as genome_router
 import asyncio
 
 app = FastAPI()
+
+# Incluir los endpoints del genome_api
+app.mount("/genome", genome_router)
 
 @app.post("/process_file")
 async def process_file(
