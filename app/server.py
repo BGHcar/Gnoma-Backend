@@ -76,4 +76,3 @@ async def get_all_variants(page: int = 1, page_size: int = 10):
     
     # Convertir los documentos para que ObjectId sea serializable
     return [jsonable_encoder_with_objectid(variant) for variant in variants]
-
