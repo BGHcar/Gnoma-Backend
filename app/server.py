@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 from process_file import process_file_parallel
 import asyncio
 import pymongo
+import logging
 from bson import ObjectId
 
 # Función para convertir ObjectId en string
@@ -76,3 +77,66 @@ async def get_all_variants(page: int = 1, page_size: int = 10):
     
     # Convertir los documentos para que ObjectId sea serializable
     return [jsonable_encoder_with_objectid(variant) for variant in variants]
+
+'''
+Las columnas por las que se debe buscar son:
+Chrom
+Filter
+Info
+Format
+
+no tienen que ser valores exactos, pueden ser parciales, por ejemplo, si se busca por Chrom=1, se deben retornar todas las variantes que tengan el valor 1 en la columna Chrom.
+
+en el front se manda esto
+
+{
+    "filter": "columnda a filtrar (Chrom, Filter, Info, Format)", 
+    "search": "palabra a buscar",
+}
+
+en 
+
+
+'''
+
+@app.get("/genome/search")
+async def search_variants(
+    filter: str = "CHROM",
+    search: str = "",
+    page: int = 1,
+    page_size: int = 10
+):
+    start_index = (page - 1) * page_size
+    query = {filter: {"$regex": search, "$options": "i"}}
+    variants = collection.find(query).skip(start_index).limit(page_size)
+    
+    logging.info(f"Searching for {search} in {filter}")
+    logging.info(f"Query: {query}")
+    
+    
+    # Convertir los documentos para que ObjectId sea serializable
+    return [jsonable_encoder_with_objectid(variant) for variant in variants]
+
+
+
+#En la capa de visualización debo poder ordenar los resultados por cada columna.
+
+@app.get("/genome/sort")
+async def sort_variants(
+    sort_by: str = "CHROM",
+    page: int = 1,
+    page_size: int = 10
+):
+    start_index = (page - 1) * page_size
+    variants = collection.find().sort(sort_by).skip(start_index).limit(page_size)
+    
+    # Convertir los documentos para que ObjectId sea serializable
+    return [jsonable_encoder_with_objectid(variant) for variant in variants]
+
+# total de endpoints: 5
+
+# localhost:8000/genome/all, con paginación 
+# localhost:8000/genome/search, con filtros por Chrom, Filter, Info y Format
+# localhost:8000/genome/sort, con ordenamiento por columna
+# localhost:8000/process_file
+# localhost:8000/ para verificar que el servidor está corriendo correctamente
