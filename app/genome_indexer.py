@@ -63,7 +63,8 @@ def process_line(line: str, column_positions: Dict[str, int]) -> Dict:
             "ALT": fields[4],
             "QUAL": fields[5],
             "FILTER": fields[6],
-            "INFO": fields[7]
+            "INFO": fields[7],
+            "FORMAT": fields[8]
         }
         
         # Procesar campos de muestra si existen

@@ -101,6 +101,8 @@ def process_file_parallel(file_path: str):
     logging.info(f"Processing completed at: {end_datetime}")
     logging.info(f"Total processing time: {total_time/60:.2f} minutes")
     logging.info(f"Average processing speed: {total_lines/total_time:.0f} lines/second")
+    logging.info(f"Number of processes used: {NUM_PROCESSES}")
+    logging.info(f"Chunk size: {CHUNK_SIZE}")
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
