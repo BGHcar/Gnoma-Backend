@@ -121,17 +121,33 @@ async def search_variants(
 
 #En la capa de visualización debo poder ordenar los resultados por cada columna.
 
+from fastapi import HTTPException
+
 @app.get("/genome/sort")
 async def sort_variants(
     sort_by: str = "CHROM",
+    order: str = "ASC",  # Orden ascendente o descendente
     page: int = 1,
     page_size: int = 10
 ):
+    # Validar que el parámetro `order` sea válido
+    if order not in ["ASC", "DESC"]:
+        raise HTTPException(status_code=400, detail="Invalid order value. Use 'ASC' or 'DESC'.")
+    
+    # Determinar el valor de sort_order dependiendo de 'ASC' o 'DESC'
+    sort_order = 1 if order == "ASC" else -1
+
+    # Validar que `sort_by` sea un campo válido (esto depende de tu colección y qué campos contiene)
+    valid_fields = ["CHROM", "POS", "ID", "REF", "ALT", "QUAL", "FILTER", "INFO", "FORMAT"]  # Añade más campos si es necesario
+    if sort_by not in valid_fields:
+        raise HTTPException(status_code=400, detail=f"Invalid sort_by value. Valid fields are: {', '.join(valid_fields)}")
+
     start_index = (page - 1) * page_size
-    variants = collection.find().sort(sort_by).skip(start_index).limit(page_size)
+    variants = collection.find().sort(sort_by, sort_order).skip(start_index).limit(page_size)
     
     # Convertir los documentos para que ObjectId sea serializable
     return [jsonable_encoder_with_objectid(variant) for variant in variants]
+
 
 # total de endpoints: 5
 
