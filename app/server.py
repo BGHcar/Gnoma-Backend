@@ -32,6 +32,9 @@ client = pymongo.MongoClient(MONGO_URI)
 db = client[DATABASE_NAME]
 collection = db['genomas']
 
+
+logging.info(f"Connected to MongoDB: {client.server_info()} with num_processes={NUM_PROCESSES}, chunk_size={CHUNK_SIZE}, workers={MAX_WORKERS}")
+
 app = FastAPI()
 
 app.add_middleware(
