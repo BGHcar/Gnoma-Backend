@@ -42,17 +42,24 @@ MONGO_URI = os.getenv("MONGO_URI")
 DATABASE_NAME = os.getenv("DATABASE_NAME")
 NUM_PROCESSES = int(os.getenv("NUM_PROCESSES", os.cpu_count()))
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", 10000))
-MAX_WORKERS = int(os.getenv("MAX_WORKERS", 16))
+MAX_WORKERS = os.cpu_count() * 5
 
 client = pymongo.MongoClient(MONGO_URI)
 db = client[DATABASE_NAME]
 collection = db['genomas']
 
-# Obtener un documento de la colección
-sample_document = collection.find_one()
+#Si la base de datos existe, obtener un documento de la colección
 
-# Extraer las claves (nombres de los campos)
-valid_fields = sample_document.keys()
+if collection.name in client.list_database_names():
+    # Obtener un documento de la colección
+    sample_document = collection.find_one()
+    
+    # Extraer las claves (nombres de los campos)
+    valid_fields = sample_document.keys()
+    
+
+
+
 
 # Mostrar los nombres de los campos
 
@@ -188,9 +195,8 @@ async def sort_variants(
     # Filtrar outputs dinámicos si es necesario
     filtered_results = []
     for doc in results:
-        if not include_outputs:
-            # Excluir campos dinámicos (outputs)
-            doc = {k: v for k, v in doc.items() if not k.startswith("output_")}
         filtered_results.append(doc)
-
     return filtered_results
+
+
+print (f"Nombres de los index ", collection.index_information())

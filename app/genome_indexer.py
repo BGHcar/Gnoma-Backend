@@ -35,12 +35,9 @@ def get_header_info(file_path: str) -> Tuple[List[str], Dict[str, int]]:
                 headers = line.strip().split('\t')
                 # Obtener todas las columnas después de FORMAT
                 sample_columns = headers[9:]
-                # Crear un mapeo de nombre de columna a posición, asegurando el formato output_CH
                 column_positions = {}
                 for idx, name in enumerate(sample_columns):
-                    # Reemplazar CS por CH si es necesario
-                    corrected_name = name.replace('output_CS', 'output_CH')
-                    column_positions[corrected_name] = idx + 9
+                    column_positions[name] = idx + 9
                 return sample_columns, column_positions
     raise ValueError("No se encontró la línea de encabezado en el archivo VCF")
 
@@ -71,7 +68,6 @@ def process_line(line: str, column_positions: Dict[str, int]) -> Dict:
         if len(fields) > 8:
             for sample_name, position in column_positions.items():
                 if position < len(fields):
-                    # Asegurar que usamos el nombre corregido (CH en lugar de CS)
                     document[sample_name] = fields[position]
         
         return document
@@ -131,12 +127,23 @@ def process_file_chunk(file_path: str, start_pos: int, chunk_size: int, column_p
         finally:
             mm.close()
 
-def create_indices():
-    """Crea índices para mejor rendimiento en consultas."""
+def create_indices(outputs: str):
+    """Crea índices para mejor rendimiento en consultas.
+    """
     try:
-        collection.create_index([("CHROM", pymongo.ASCENDING), ("POS", pymongo.ASCENDING)])
-        collection.create_index("POS")
-        collection.create_index("CHROM")
-        print("Índices creados correctamente")
+        collection.create_index([("CHROM", pymongo.ASCENDING)])
+        collection.create_index([("POS", pymongo.ASCENDING)])
+        collection.create_index([("ID", pymongo.ASCENDING)])
+        collection.create_index([("REF", pymongo.ASCENDING)])
+        collection.create_index([("ALT", pymongo.ASCENDING)])
+        collection.create_index([("FILTER", pymongo.ASCENDING)])
+        collection.create_index([("INFO", pymongo.ASCENDING)])
+        collection.create_index([("FORMAT", pymongo.ASCENDING)])
+        collection.create_index([("output", pymongo.ASCENDING)])
+        
+        print("Índices creados con éxito")
+    
+            
+            
     except Exception as e:
         print(f"Error creando índices: {e}")

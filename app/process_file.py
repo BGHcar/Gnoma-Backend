@@ -46,7 +46,7 @@ def process_file_parallel(file_path: str):
     logging.info(f"Found {len(sample_columns)} sample columns")
     
     # Create indices first
-    create_indices()
+    create_indices(sample_columns)
     
     chunk_positions = []
     total_lines = 0
