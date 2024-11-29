@@ -51,8 +51,14 @@ collection = db['genomas']
 
 #Si la base de datos existe, obtener un documento de la colección
 if collection.name in client.list_database_names():
-    # Obtener un documento de la colección
-    sample_document = collection.find_one()
+    # Obtener el primer documento
+    primer_documento = collection.find_one()
+
+    # Obtener el último documento
+    ultimo_documento = collection.find_one(sort=[('_id', -1)])
+
+    # Combinar ambos documentos sin duplicar datos
+    sample_document = {**primer_documento, **ultimo_documento}
     
     # Extraer las claves (nombres de los campos)
     valid_fields = sample_document.keys()
