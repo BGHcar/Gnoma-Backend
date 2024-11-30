@@ -271,5 +271,3 @@ async def sort_variants(
         "data": results,
         "process_time": round(time.time() - start_time, 3)
     }
-
-print(f"Nombres de los index ", collection.index_information())
