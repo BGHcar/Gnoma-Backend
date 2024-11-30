@@ -1,18 +1,26 @@
+import time
 import os
-from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException, Query
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import logging
-import app.serverNew as database
-import time
 from dotenv import load_dotenv
+from typing import Any, Dict, List
+import multiprocessing
 from concurrent.futures import ThreadPoolExecutor
 from motor.motor_asyncio import AsyncIOMotorClient
-import asyncio
-from bson import ObjectId
-from typing import Dict, Any, Optional
-from functools import partial
 
-# Definir estructura del documento
+# Configuración básica
+load_dotenv()
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('genome_processing.log'),
+        logging.StreamHandler()
+    ]
+)
+
 class GenomeDocument:
     def __init__(self, doc: Dict[str, Any]):
         self.CHROM = doc.get('CHROM')
@@ -24,31 +32,9 @@ class GenomeDocument:
         self.FILTER = doc.get('FILTER')
         self.INFO = doc.get('INFO')
         self.FORMAT = doc.get('FORMAT')
-        # Campos output dinámicos
         self.outputs = {k: v for k, v in doc.items() if k.startswith('output_')}
 
-# Configuración básica
-load_dotenv()
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('genome_processing.log'),
-        logging.StreamHandler()
-    ]
-)
-
-# Variables globales (inicialmente vacías)
 app = FastAPI()
-collection = None
-total_documents = 0
-indexes = {}
-valid_fields = []
-numWorkers = int(os.getenv("MAX_WORKERS", os.cpu_count()))
-numProcesses = int(os.getenv("NUM_PROCESSES", os.cpu_count()))
-chunkSize = int(os.getenv("CHUNK_SIZE", 10000))
-numProcessByPool = 0
-numDividedByProcesses = 0
 
 # Configuración CORS
 app.add_middleware(
@@ -59,194 +45,124 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Variables de entorno y configuración
+MONGO_URI = os.getenv("MONGO_URI")
+DATABASE_NAME = os.getenv("DATABASE_NAME")
+NUM_WORKERS = 16  # Usar todos los hilos disponibles
+BATCH_SIZE = 5  # Bloques más pequeños para mejor distribución
+
+# Cliente MongoDB
+client = AsyncIOMotorClient(MONGO_URI)
+db = client[DATABASE_NAME]
+collection = db[DATABASE_NAME]
+
+# Pool de threads optimizado para 16 hilos
+thread_pool = ThreadPoolExecutor(max_workers=NUM_WORKERS)
+
+def process_batch(documents: List[Dict]) -> List[GenomeDocument]:
+    """Procesa un batch pequeño de documentos"""
+    return [GenomeDocument(doc) for doc in documents]
+
+async def get_genome_data(
+    filter: str = "CHROM",
+    search: str = "",
+    page: int = 1,
+    page_size: int = 10
+) -> Dict:
+    """Función principal con procesamiento altamente paralelo"""
+    try:
+        start_time = time.time()
+        
+        # Validar página y tamaño de página
+        if page_size < 5 or page_size > 100:
+            raise HTTPException(
+                status_code=400,
+                detail="page_size must be between 5 and 100"
+            )
+        
+        # Construir query
+        query = {filter: {"$regex": search, "$options": "i"}}
+        skip = (page - 1) * page_size
+        
+        # Obtener documentos
+        cursor = collection.find(query).hint([(filter, 1)]).sort(filter, 1).skip(skip).limit(page_size)
+        documents = []
+        async for doc in cursor:
+            documents.append(doc)
+
+        if not documents:
+            return {
+                "data": [],
+                "total": 0,
+                "page": page,
+                "page_size": page_size,
+                "total_pages": 0,
+                "process_time": time.time() - start_time
+            }
+
+        # Dividir en batches muy pequeños
+        num_docs = len(documents)
+        batch_size = max(1, min(BATCH_SIZE, num_docs // NUM_WORKERS))
+        batches = [documents[i:i + batch_size] for i in range(0, num_docs, batch_size)]
+
+        # Procesar todos los batches en paralelo
+        futures = []
+        for batch in batches:
+            future = thread_pool.submit(process_batch, batch)
+            futures.append(future)
+
+        # Recolectar resultados manteniendo el orden
+        processed_docs = []
+        for future in futures:
+            processed_docs.extend(future.result())
+
+        total_time = time.time() - start_time
+        logging.info(f"Query took {total_time:.2f} seconds")
+        
+        return {
+            "data": processed_docs,
+            "total": len(processed_docs),
+            "page": page,
+            "page_size": page_size,
+            "total_pages": page,  # Simplificado para evitar count innecesario
+            "process_time": total_time
+        }
+        
+    except Exception as e:
+        logging.error(f"Error in get_genome_data: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error processing request: {str(e)}"
+        )
+
 @app.on_event("startup")
 async def startup_event():
-    global collection, total_documents, indexes, numProcessByPool, numDividedByProcesses
-    
     try:
-        # Inicializar variables de forma asíncrona
-        collection = database.collection
-        total_documents = await database.getTotalDocuments()
-        indexes = await database.getIndexes()
-        valid_fields = await database.getValidFields()
-        
-        # Calcular variables dependientes
-        numProcessByPool = min(total_documents / numWorkers, chunkSize)
-        numDividedByProcesses = int(numProcessByPool / numProcesses)
-        
-        logging.info(f"Inicialización completada: {numWorkers} workers, {numProcesses} processes")
-        logging.info(f"Total documentos: {total_documents}")
+        await db.command("ping")
+        logging.info(f"Conexión exitosa a la base de datos {DATABASE_NAME}")
     except Exception as e:
         logging.error(f"Error durante la inicialización: {str(e)}")
         raise
 
-@app.on_event("shutdown")
-async def shutdown_event():
-    await database.close_mongo_connection()
-
-async def conectionStatus():
-    logging.info(f"Conexión exitosa, total de documentos en la colección: {total_documents}")
-
-def convert_mongo_doc(doc: Dict[str, Any]) -> Dict[str, Any]:
-    """Convierte un documento de MongoDB a formato JSON serializable"""
-    if doc is None:
-        return None
-    
-    for k, v in doc.items():
-        if isinstance(v, ObjectId):
-            doc[k] = str(v)
-        elif isinstance(v, dict):
-            convert_mongo_doc(v)
-        elif isinstance(v, list):
-            for item in v:
-                if isinstance(item, dict):
-                    convert_mongo_doc(item)
-    return doc
-
-async def queryParallelProcessing(query, page, page_size, sort_by, order, filter_field=None):
-    try:
-        start_index = (page - 1) * page_size
-        chunks = []
-        
-        for i in range(numProcesses):
-            chunk_size = page_size // numProcesses
-            skip = start_index + (i * chunk_size)
-            limit = chunk_size if i < numProcesses - 1 else page_size - (chunk_size * (numProcesses - 1))
-            chunks.append((skip, limit))
-        
-        tasks = [
-            search_chunk(
-                query=query,
-                skip=skip,
-                limit=limit,
-                sort_by=sort_by,
-                order=order,
-                filter_field=filter_field
-            )
-            for skip, limit in chunks
-        ]
-        
-        results = await asyncio.gather(*tasks)
-        variants = []
-        for chunk_result in results:
-            variants.extend(chunk_result)
-            
-        if sort_by:
-            variants.sort(
-                key=lambda x: x.get(sort_by, ''), 
-                reverse=(order != "ASC")
-            )
-            
-        return variants
-        
-    except Exception as e:
-        logging.error(f"Error en procesamiento paralelo: {str(e)}")
-        return []
-
-async def search_chunk(query, skip, limit, sort_by, order, filter_field=None):
-    try:
-        # Proyección completa
-        projection = {
-            "CHROM": 1,
-            "POS": 1,
-            "ID": 1,
-            "REF": 1,
-            "ALT": 1,
-            "QUAL": 1,
-            "FILTER": 1,
-            "INFO": 1,
-            "FORMAT": 1
-        }
-        
-        # Agregar campos output dinámicamente
-        for i in range(1, 21):
-            projection[f"output_CH{i}"] = 1
-            
-        # Crear cursor con hint correcto
-        cursor = database.collection.find(
-            query,
-            projection
-        )
-        
-        # Aplicar hint solo si hay un campo de filtro
-        if filter_field:
-            cursor = cursor.hint([(filter_field, 1)])
-        
-        if sort_by:
-            cursor = cursor.sort([(sort_by, 1 if order == "ASC" else -1)])
-            
-        cursor = cursor.skip(skip).limit(limit)
-        chunk_results = await cursor.to_list(length=limit)
-        return [convert_mongo_doc(doc) for doc in chunk_results]
-        
-    except Exception as e:
-        logging.error(f"Error en chunk: {str(e)}")
-        return []
-
 @app.get("/genome/all")
-async def start_page(page: int = 1, page_size: int = 10, sort_by: str = None, order: str = "ASC", search: str = "", filter: str = ""):
-    start_time = time.time()
-    
-    # Mejorar la construcción del query
-    if filter and search:
-        query = {filter: {"$regex": search, "$options": "i"}}
-    else:
-        query = {}
-        
-    data = await queryParallelProcessing(
-        query,
-        page,
-        page_size,
-        sort_by,
-        order
-    )
-    
-    return {
-        "data": data,
-        "process_time": round(time.time() - start_time, 3),
-        "total_items": len(data)
-    }
+async def root(
+    filter: str = "CHROM",
+    search: str = "",
+    page: int = 1,
+    page_size: int = 10
+):
+    return await get_genome_data(filter, search, page, page_size)
 
 @app.get("/genome/search")
 async def search_variants(
     filter: str = "CHROM",
     search: str = "",
     page: int = 1,
-    page_size: int = 10,
-    sort_by: str = None,
-    order: str = "ASC"
+    page_size: int = 10
 ):
-    start_time = time.time()
-    logging.info(f"FILTER: {filter}, SEARCH: {search}")
-    
-    try:
-        # Construir query para búsqueda parcial
-        query = {filter: {"$regex": f".*{search}.*", "$options": "i"}} if search else {}
-        
-        # Usar procesamiento paralelo con hint
-        variants = await queryParallelProcessing(
-            query=query,
-            page=page,
-            page_size=page_size,
-            sort_by=sort_by,
-            order=order,
-            filter_field=filter
-        )
-        
-        # Obtener total de coincidencias
-        total = await database.collection.count_documents(query)
-        
-        return {
-            "data": variants,
-            "total": total,
-            "page": page,
-            "page_size": page_size,
-            "process_time": round(time.time() - start_time, 3)
-        }
-        
-    except Exception as e:
-        logging.error(f"Error en búsqueda: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error al buscar variantes: {str(e)}"
-        )
+    return await get_genome_data(filter, search, page, page_size)
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    thread_pool.shutdown(wait=True)
+    client.close()
