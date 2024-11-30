@@ -81,8 +81,9 @@ async def root(
     cursor = collection.find(query)
     logging.info(f"Estos son los indices: {collection.index_information()}")
     logging.info(f"Filter in hint: {filter}")
-    cursor = cursor.hint([(filter, 1)]).sort(filter, 1).skip((page - 1) * page_size).limit(page_size)
-        
+    #cursor = cursor.hint([(filter, 1)]).sort(filter, 1).skip((page - 1) * page_size).limit(page_size)
+    # usando una busqueda sin indices
+    cursor = cursor.sort(filter, 1).skip((page - 1) *page_size).limit(page_size)   
     return_data = []
     for doc in cursor:
         return_data.append(GenomeDocument(doc))

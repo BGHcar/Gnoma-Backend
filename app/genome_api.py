@@ -5,7 +5,6 @@ from fastapi.middleware.cors import CORSMiddleware
 import logging
 from dotenv import load_dotenv
 from typing import Any, Dict, List
-import multiprocessing
 from concurrent.futures import ThreadPoolExecutor
 from motor.motor_asyncio import AsyncIOMotorClient
 
