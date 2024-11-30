@@ -136,6 +136,7 @@ def create_indices(outputs: str):
         collection.create_index([("ID", pymongo.ASCENDING)])
         collection.create_index([("REF", pymongo.ASCENDING)])
         collection.create_index([("ALT", pymongo.ASCENDING)])
+        collection.create_index([("QUAL", pymongo.ASCENDING)])
         collection.create_index([("FILTER", pymongo.ASCENDING)])
         collection.create_index([("INFO", pymongo.ASCENDING)])
         collection.create_index([("FORMAT", pymongo.ASCENDING)])

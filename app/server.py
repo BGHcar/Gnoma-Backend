@@ -43,7 +43,7 @@ MONGO_URI = os.getenv("MONGO_URI")
 DATABASE_NAME = os.getenv("DATABASE_NAME")
 NUM_PROCESSES = int(os.getenv("NUM_PROCESSES", os.cpu_count()))
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", 10000))
-MAX_WORKERS = os.cpu_count() * 5
+MAX_WORKERS = os.cpu_count()
 
 client = pymongo.MongoClient(MONGO_URI)
 db = client[DATABASE_NAME]
