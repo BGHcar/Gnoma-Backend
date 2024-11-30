@@ -47,7 +47,7 @@ app.add_middleware(
 # Variables de entorno y configuración
 MONGO_URI = os.getenv("MONGO_URI")
 DATABASE_NAME = os.getenv("DATABASE_NAME")
-NUM_WORKERS = 16  # Usar todos los hilos disponibles
+NUM_WORKERS = os.getenv("NUM_WORKERS")  # Usar todos los hilos disponibles
 BATCH_SIZE = 5  # Bloques más pequeños para mejor distribución
 
 # Cliente MongoDB
