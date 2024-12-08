@@ -1,12 +1,13 @@
 # genome_indexer.py
 from concurrent.futures import ThreadPoolExecutor
 import pymongo
-from pymongo import UpdateOne, InsertOne
+from pymongo import InsertOne
 from dotenv import load_dotenv
 import os
 import time
-from typing import List, Dict, Tuple
+import logging
 import mmap
+from typing import List, Dict, Tuple
 
 load_dotenv()
 
@@ -33,11 +34,11 @@ def get_header_info(file_path: str) -> Tuple[List[str], Dict[str, int]]:
         for line in f:
             if line.startswith('#CHROM'):
                 headers = line.strip().split('\t')
-                # Obtener todas las columnas después de FORMAT
                 sample_columns = headers[9:]
-                column_positions = {}
-                for idx, name in enumerate(sample_columns):
-                    column_positions[name] = idx + 9
+                column_positions = {
+                    name: idx + 9 
+                    for idx, name in enumerate(sample_columns)
+                }
                 return sample_columns, column_positions
     raise ValueError("No se encontró la línea de encabezado en el archivo VCF")
 
@@ -51,7 +52,6 @@ def process_line(line: str, column_positions: Dict[str, int]) -> Dict:
         return None
     
     try:
-        # Documento base con campos comunes
         document = {
             "CHROM": fields[0],
             "POS": fields[1],
@@ -64,20 +64,18 @@ def process_line(line: str, column_positions: Dict[str, int]) -> Dict:
             "FORMAT": fields[8]
         }
         
-        # Procesar campos de muestra si existen
-        if len(fields) > 8:
-            for sample_name, position in column_positions.items():
-                if position < len(fields):
-                    document[sample_name] = fields[position]
+        for sample_name, position in column_positions.items():
+            if position < len(fields):
+                document[sample_name] = fields[position]
         
         return document
         
     except Exception as e:
-        print(f"Error procesando línea: {e}")
-        print(f"Contenido de la línea: {line}")
+        logging.error(f"Error procesando línea: {e}")
+        logging.error(f"Contenido de la línea: {line}")
         return None
 
-def bulk_insert_mongo(data: List[Dict]):
+def bulk_insert_mongo(data: List[Dict], total_processed: List[int]):
     """Inserta múltiples documentos en MongoDB."""
     if not data:
         return
@@ -90,13 +88,14 @@ def bulk_insert_mongo(data: List[Dict]):
     if operations:
         try:
             result = collection.bulk_write(operations, ordered=False)
-            print(f"Insertados {result.inserted_count} documentos")
+            total_processed[0] += result.inserted_count
+            logging.info(f"Insertados {result.inserted_count} documentos. Total: {total_processed[0]}")
         except pymongo.errors.BulkWriteError as bwe:
-            print(f"Error de escritura masiva: {bwe.details['writeErrors']}")
+            logging.error(f"Error de escritura masiva: {bwe.details.get('writeErrors')}")
         except Exception as e:
-            print(f"Error durante la inserción masiva: {e}")
+            logging.error(f"Error durante la inserción masiva: {e}")
 
-def process_file_chunk(file_path: str, start_pos: int, chunk_size: int, column_positions: Dict[str, int]):
+def process_file_chunk(file_path: str, start_pos: int, chunk_size: int, column_positions: Dict[str, int], total_processed: List[int]):
     """Procesa un fragmento del archivo."""
     batch = []
     
@@ -115,21 +114,20 @@ def process_file_chunk(file_path: str, start_pos: int, chunk_size: int, column_p
                     batch.append(document)
                     
                 if len(batch) >= BATCH_SIZE:
-                    bulk_insert_mongo(batch)
+                    bulk_insert_mongo(batch, total_processed)
                     batch = []
             
             # Insertar registros restantes
             if batch:
-                bulk_insert_mongo(batch)
+                bulk_insert_mongo(batch, total_processed)
                 
         except Exception as e:
-            print(f"Error procesando fragmento: {e}")
+            logging.error(f"Error procesando fragmento: {e}")
         finally:
             mm.close()
 
-def create_indices(outputs: str):
-    """Crea índices para mejor rendimiento en consultas.
-    """
+def create_indices():
+    """Crea índices para mejor rendimiento en consultas."""
     try:
         collection.create_index([("CHROM", pymongo.ASCENDING)])
         collection.create_index([("POS", pymongo.ASCENDING)])
@@ -142,9 +140,6 @@ def create_indices(outputs: str):
         collection.create_index([("FORMAT", pymongo.ASCENDING)])
         collection.create_index([("output", pymongo.ASCENDING)])
         
-        print("Índices creados con éxito")
-    
-            
-            
+        logging.info("Índices creados con éxito")
     except Exception as e:
-        print(f"Error creando índices: {e}")
+        logging.error(f"Error creando índices: {e}")

@@ -1,3 +1,4 @@
+# server.py
 import asyncio
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,24 +14,23 @@ from datetime import datetime
 import time
 import threading
 
-LOG_DIR = './logs'
-os.makedirs(LOG_DIR, exist_ok=True)
+# Configurar logging
 logging.basicConfig(
    level=logging.INFO,
    format='%(asctime)s - %(levelname)s - %(message)s',
    handlers=[
-       logging.FileHandler(os.path.join(LOG_DIR, 'server.log')),
-       logging.StreamHandler()
+       logging.StreamHandler(),
+       logging.FileHandler('server.log')
    ]
 )
 
-def jsonable_encoder_with_objectid(obj):
+def json_compatible(obj):
    if isinstance(obj, ObjectId):
        return str(obj)
    elif isinstance(obj, dict):
-       return {key: jsonable_encoder_with_objectid(value) for key, value in obj.items()}
+       return {key: json_compatible(value) for key, value in obj.items()}
    elif isinstance(obj, list):
-       return [jsonable_encoder_with_objectid(item) for item in obj]
+       return [json_compatible(item) for item in obj]
    else:
        return obj
 
@@ -60,7 +60,7 @@ if collection.name in db.list_collection_names():
    sample_document = {**primer_documento, **ultimo_documento} if primer_documento and ultimo_documento else {}
    valid_fields = sample_document.keys()
 
-logging.info(f"Connected to MongoDB: with num_processes={NUM_PROCESSES}, chunk_size={CHUNK_SIZE}, workers={MAX_WORKERS}")
+logging.info(f"Conectado a MongoDB: processes={NUM_PROCESSES}, chunk={CHUNK_SIZE}, workers={MAX_WORKERS}")
 
 app = FastAPI()
 
@@ -121,55 +121,55 @@ def parallel_process_file(file_path):
 
 @app.post("/process_file")
 async def process_file(
-   background_tasks: BackgroundTasks,
-   file: UploadFile = File(...)
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...)
 ):
-   start_time = time.time()
-   try:
-       with tempfile.NamedTemporaryFile(
-           delete=False, 
-           prefix=f"vcf_{datetime.now().strftime('%Y%m%d_%H%M%S')}_", 
-           suffix=f"_{file.filename}"
-       ) as temp_file:
-           content = await file.read()
-           temp_file.write(content)
-           temp_file_path = temp_file.name
-           
-           if not content:
-               logging.warning("Archivo vacío recibido")
-               return {
-                   "error": "El archivo está vacío",
-                   "process_time": round(time.time() - start_time, 3)
-               }
-           
-           if not file.filename.lower().endswith('.vcf'):
-               logging.warning(f"Archivo inválido: {file.filename}")
-               return {
-                   "error": "Por favor, suba un archivo VCF",
-                   "process_time": round(time.time() - start_time, 3)
-               }
-       
-       def cleanup_temp_file():
-           try:
-               os.unlink(temp_file_path)
-               logging.info(f"Archivo temporal {temp_file_path} eliminado")
-           except Exception as e:
-               logging.error(f"Error eliminando archivo temporal: {e}")
-       
-       background_tasks.add_task(parallel_process_file, temp_file_path)
-       background_tasks.add_task(cleanup_temp_file)
+    start_time = time.time()
+    try:
+        with tempfile.NamedTemporaryFile(
+            delete=False, 
+            prefix=f"vcf_{datetime.now().strftime('%Y%m%d_%H%M%S')}_", 
+            suffix=f"_{file.filename}"
+        ) as temp_file:
+            content = await file.read()
+            temp_file.write(content)
+            temp_file_path = temp_file.name
+            
+            if not content:
+                logging.warning("Archivo vacío recibido")
+                return {
+                    "error": "El archivo está vacío",
+                    "process_time": round(time.time() - start_time, 3)
+                }
+            
+            if not file.filename.lower().endswith('.vcf'):
+                logging.warning(f"Archivo inválido: {file.filename}")
+                return {
+                    "error": "Por favor, suba un archivo VCF",
+                    "process_time": round(time.time() - start_time, 3)
+                }
+        
+        def cleanup_temp_file():
+            try:
+                os.unlink(temp_file_path)
+                logging.info(f"Archivo temporal {temp_file_path} eliminado")
+            except Exception as e:
+                logging.error(f"Error eliminando archivo temporal: {e}")
+        
+        background_tasks.add_task(parallel_process_file, temp_file_path)
+        background_tasks.add_task(cleanup_temp_file)
 
-       return {
-           "message": f"Archivo '{file.filename}' cargado. Procesamiento iniciado.",
-           "temp_file": temp_file_path,
-           "process_time": round(time.time() - start_time, 3)
-       }
-   except Exception as e:
-       logging.error(f"Error procesando archivo: {str(e)}")
-       return {
-           "error": f"Error procesando archivo: {str(e)}",
-           "process_time": round(time.time() - start_time, 3)
-       }
+        return {
+            "message": f"Archivo '{file.filename}' cargado. Procesamiento iniciado.",
+            "temp_file": temp_file_path,
+            "process_time": round(time.time() - start_time, 3)
+        }
+    except Exception as e:
+        logging.error(f"Error procesando archivo: {str(e)}")
+        return {
+            "error": f"Error procesando archivo: {str(e)}",
+            "process_time": round(time.time() - start_time, 3)
+        }
 
 @app.get("/")
 async def root():
@@ -280,7 +280,7 @@ async def sort_variants(
     page_size: int = 10,
     filter: str = None,
     search: str = None
-    ):
+):
     logging.info(f"Filtros de búsqueda: {filter} - {search}")
     start_time = time.time()
     
@@ -301,15 +301,12 @@ async def sort_variants(
     if filter and search:
         query = {filter: {"$regex": search, "$options": "i"}}
         logging.info(f"Sort combined with search query: {query}")
-        
         hint = [(filter, sort_order)]
     else:
         if sort_by.startswith("output_"):
             hint = [("output", sort_order)]
         else:
             hint = [(sort_by, sort_order)]
-        
-
 
     results = await get_variants_parallel(
         query=query,

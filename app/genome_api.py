@@ -165,3 +165,6 @@ async def search_variants(
 async def shutdown_event():
     thread_pool.shutdown(wait=True)
     client.close()
+    
+    
+#4.908.903  datos
