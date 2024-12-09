@@ -1,4 +1,3 @@
-# server.py
 import asyncio
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,112 +11,116 @@ from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 import tempfile
 from datetime import datetime
 import time
-import threading
+
+# Asegurar que existe el directorio de logs
+os.makedirs('logs', exist_ok=True)
 
 # Configurar logging
 logging.basicConfig(
-   level=logging.INFO,
-   format='%(asctime)s - %(levelname)s - %(message)s',
-   handlers=[
-       logging.StreamHandler(),
-       logging.FileHandler('server.log')
-   ]
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('logs/server.log'),
+        logging.StreamHandler()
+    ]
 )
 
 def json_compatible(obj):
-   if isinstance(obj, ObjectId):
-       return str(obj)
-   elif isinstance(obj, dict):
-       return {key: json_compatible(value) for key, value in obj.items()}
-   elif isinstance(obj, list):
-       return [json_compatible(item) for item in obj]
-   else:
-       return obj
+    if isinstance(obj, ObjectId):
+        return str(obj)
+    elif isinstance(obj, dict):
+        return {key: json_compatible(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [json_compatible(item) for item in obj]
+    else:
+        return obj
 
 load_dotenv()
 
-MONGO_URI = os.getenv("MONGO_URI") 
+MONGO_URI = os.getenv("MONGO_URI")
 DATABASE_NAME = os.getenv("DATABASE_NAME")
 NUM_PROCESSES = int(os.getenv("NUM_PROCESSES", os.cpu_count()))
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", 10000))
 MAX_WORKERS = int(os.getenv("MAX_WORKERS", os.cpu_count()))
 
 client = pymongo.MongoClient(
-   MONGO_URI,
-   maxPoolSize=MAX_WORKERS,
-   connectTimeoutMS=30000,
-   socketTimeoutMS=None,
-   connect=False,
-   compressors='snappy'
+    MONGO_URI,
+    maxPoolSize=MAX_WORKERS,
+    connectTimeoutMS=30000,
+    socketTimeoutMS=None,
+    connect=False,
+    w=1,
+    journal=False,
+    compressors='snappy'
 )
 
 db = client[DATABASE_NAME]
 collection = db['genomas']
 
 if collection.name in db.list_collection_names():
-   primer_documento = collection.find_one()
-   ultimo_documento = collection.find_one(sort=[('_id', -1)])
-   sample_document = {**primer_documento, **ultimo_documento} if primer_documento and ultimo_documento else {}
-   valid_fields = sample_document.keys()
+    primer_documento = collection.find_one()
+    ultimo_documento = collection.find_one(sort=[('_id', -1)])
+    sample_document = {**primer_documento, **ultimo_documento} if primer_documento and ultimo_documento else {}
+    valid_fields = sample_document.keys()
 
-logging.info(f"Conectado a MongoDB: processes={NUM_PROCESSES}, chunk={CHUNK_SIZE}, workers={MAX_WORKERS}")
+logging.info(f"Connected to MongoDB: processes={NUM_PROCESSES}, chunk={CHUNK_SIZE}, workers={MAX_WORKERS}")
 
 app = FastAPI()
 
 app.add_middleware(
-   CORSMiddleware,
-   allow_origins=["http://localhost:4200"],
-   allow_credentials=True,
-   allow_methods=["GET", "POST", "PUT", "DELETE"],
-   allow_headers=["*"],
-   expose_headers=["*"]
+    CORSMiddleware,
+    allow_origins=["http://localhost:4200"],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_headers=["*"],
+    expose_headers=["*"]
 )
 
 def process_chunk(process_id, skip, limit, query, sort_by, sort_order, max_workers, hint=None):
-   with ThreadPoolExecutor(max_workers=max_workers) as thread_executor:
-       def thread_query(thread_id):
-           try:
-               base_query = query if query else {}
-               cursor = collection.find(base_query)
-               
-               if sort_by:
-                   cursor = cursor.sort(sort_by, sort_order)
-               
-               cursor = cursor.skip(skip).limit(limit)
-               
-               if hint:
-                   logging.info(f"P{process_id}-T{thread_id}: Using hint {hint}")
-                   cursor = cursor.hint(hint)
-               
-               results = [
-                   {**{k: str(v) if isinstance(v, ObjectId) else v for k, v in doc.items()}}
-                   for doc in cursor
-               ]
-               
-               logging.info(f"P{process_id}-T{thread_id}: Found {len(results)} docs")
-               return results
-           except Exception as e:
-               logging.error(f"P{process_id}-T{thread_id}: Error - {str(e)}")
-               return []
+    with ThreadPoolExecutor(max_workers=max_workers) as thread_executor:
+        def thread_query(thread_id):
+            try:
+                base_query = query if query else {}
+                cursor = collection.find(base_query)
+                
+                if sort_by:
+                    cursor = cursor.sort(sort_by, sort_order)
+                
+                cursor = cursor.skip(skip).limit(limit)
+                
+                if hint:
+                    logging.info(f"P{process_id}-T{thread_id}: Using hint {hint}")
+                    cursor = cursor.hint(hint)
+                
+                results = [
+                    {**{k: str(v) if isinstance(v, ObjectId) else v for k, v in doc.items()}}
+                    for doc in cursor
+                ]
+                
+                logging.info(f"P{process_id}-T{thread_id}: Found {len(results)} docs")
+                return results
+            except Exception as e:
+                logging.error(f"P{process_id}-T{thread_id}: Error - {str(e)}")
+                return []
 
-       futures = []
-       threads_per_process = max_workers
-       for t in range(threads_per_process):
-           futures.append(thread_executor.submit(thread_query, t))
-       
-       results = []
-       for f in futures:
-           try:
-               result = f.result()
-               if result:
-                   results.extend(result)
-           except Exception as e:
-               logging.error(f"Thread error: {e}")
-       
-       return results
+        futures = []
+        threads_per_process = max_workers
+        for t in range(threads_per_process):
+            futures.append(thread_executor.submit(thread_query, t))
+        
+        results = []
+        for f in futures:
+            try:
+                result = f.result()
+                if result:
+                    results.extend(result)
+            except Exception as e:
+                logging.error(f"Thread error: {e}")
+        
+        return results
 
 def parallel_process_file(file_path):
-   process_file_parallel(file_path)
+    process_file_parallel(file_path)
 
 @app.post("/process_file")
 async def process_file(
@@ -136,48 +139,48 @@ async def process_file(
             temp_file_path = temp_file.name
             
             if not content:
-                logging.warning("Archivo vacío recibido")
+                logging.warning("Empty file received")
                 return {
-                    "error": "El archivo está vacío",
+                    "error": "The file is empty",
                     "process_time": round(time.time() - start_time, 3)
                 }
             
             if not file.filename.lower().endswith('.vcf'):
-                logging.warning(f"Archivo inválido: {file.filename}")
+                logging.warning(f"Invalid file: {file.filename}")
                 return {
-                    "error": "Por favor, suba un archivo VCF",
+                    "error": "Please upload a VCF file",
                     "process_time": round(time.time() - start_time, 3)
                 }
         
         def cleanup_temp_file():
             try:
                 os.unlink(temp_file_path)
-                logging.info(f"Archivo temporal {temp_file_path} eliminado")
+                logging.info(f"Temporary file {temp_file_path} deleted")
             except Exception as e:
-                logging.error(f"Error eliminando archivo temporal: {e}")
+                logging.error(f"Error deleting temp file: {e}")
         
         background_tasks.add_task(parallel_process_file, temp_file_path)
         background_tasks.add_task(cleanup_temp_file)
 
         return {
-            "message": f"Archivo '{file.filename}' cargado. Procesamiento iniciado.",
+            "message": f"File '{file.filename}' uploaded. Processing started.",
             "temp_file": temp_file_path,
             "process_time": round(time.time() - start_time, 3)
         }
     except Exception as e:
-        logging.error(f"Error procesando archivo: {str(e)}")
+        logging.error(f"Error processing file: {str(e)}")
         return {
-            "error": f"Error procesando archivo: {str(e)}",
+            "error": f"Error processing file: {str(e)}",
             "process_time": round(time.time() - start_time, 3)
         }
 
 @app.get("/")
 async def root():
-   start_time = time.time()
-   return {
-       "message": "FastAPI server running correctly.",
-       "process_time": round(time.time() - start_time, 3)
-   }
+    start_time = time.time()
+    return {
+        "message": "FastAPI server running correctly.",
+        "process_time": round(time.time() - start_time, 3)
+    }
 
 async def get_variants_parallel(query=None, sort_by="_id", sort_order=1, page=1, page_size=10, hint=None):
     docs_per_process = max(1, page_size // NUM_PROCESSES)
@@ -281,7 +284,7 @@ async def sort_variants(
     filter: str = None,
     search: str = None
 ):
-    logging.info(f"Filtros de búsqueda: {filter} - {search}")
+    logging.info(f"Search filters: {filter} - {search}")
     start_time = time.time()
     
     if order not in ["ASC", "DESC"]:

@@ -1,4 +1,3 @@
-# genome_indexer.py
 from concurrent.futures import ThreadPoolExecutor
 import pymongo
 from pymongo import InsertOne
@@ -6,10 +5,22 @@ from dotenv import load_dotenv
 import os
 import time
 import logging
-import mmap
 from typing import List, Dict, Tuple
 
 load_dotenv()
+
+# Asegurar que existe el directorio de logs
+os.makedirs('logs', exist_ok=True)
+
+# Configurar logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('logs/indexer.log'),
+        logging.StreamHandler()
+    ]
+)
 
 MONGO_URI = os.getenv("MONGO_URI")
 DATABASE_NAME = os.getenv("DATABASE_NAME")
@@ -21,6 +32,9 @@ client = pymongo.MongoClient(
     connectTimeoutMS=30000,
     socketTimeoutMS=None,
     connect=False,
+    w=1,  # Write concern reducido
+    journal=False,
+    compressors='snappy'
 )
 db = client[DATABASE_NAME]
 collection = db['genomas']
@@ -72,59 +86,36 @@ def process_line(line: str, column_positions: Dict[str, int]) -> Dict:
         
     except Exception as e:
         logging.error(f"Error procesando línea: {e}")
-        logging.error(f"Contenido de la línea: {line}")
         return None
 
-def bulk_insert_mongo(data: List[Dict], total_processed: List[int]):
-    """Inserta múltiples documentos en MongoDB."""
-    if not data:
-        return
-        
-    operations = [
-        InsertOne(doc) for doc in data
-        if doc is not None
-    ]
-    
-    if operations:
-        try:
-            result = collection.bulk_write(operations, ordered=False)
-            total_processed[0] += result.inserted_count
-            logging.info(f"Insertados {result.inserted_count} documentos. Total: {total_processed[0]}")
-        except pymongo.errors.BulkWriteError as bwe:
-            logging.error(f"Error de escritura masiva: {bwe.details.get('writeErrors')}")
-        except Exception as e:
-            logging.error(f"Error durante la inserción masiva: {e}")
-
-def process_file_chunk(file_path: str, start_pos: int, chunk_size: int, column_positions: Dict[str, int], total_processed: List[int]):
-    """Procesa un fragmento del archivo."""
-    batch = []
+def process_file_chunk(file_path: str, start_pos: int, chunk_size: int, column_positions: Dict[str, int]) -> List[Dict]:
+    """Procesa un chunk del archivo."""
+    documents = []
     
     with open(file_path, 'r') as f:
-        mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
-        mm.seek(start_pos)
+        f.seek(start_pos)
+        lines_processed = 0
         
-        try:
-            for _ in range(chunk_size):
-                line = mm.readline().decode('utf-8')
-                if not line:
-                    break
-                    
-                document = process_line(line, column_positions)
-                if document:
-                    batch.append(document)
-                    
-                if len(batch) >= BATCH_SIZE:
-                    bulk_insert_mongo(batch, total_processed)
-                    batch = []
-            
-            # Insertar registros restantes
-            if batch:
-                bulk_insert_mongo(batch, total_processed)
+        while lines_processed < chunk_size:
+            line = f.readline()
+            if not line:
+                break
                 
+            document = process_line(line, column_positions)
+            if document:
+                documents.append(document)
+            
+            lines_processed += 1
+    
+    # Insertar documentos en batch
+    if documents:
+        try:
+            result = collection.insert_many(documents, ordered=False)
+            logging.info(f"Insertados {len(result.inserted_ids)} documentos")
         except Exception as e:
-            logging.error(f"Error procesando fragmento: {e}")
-        finally:
-            mm.close()
+            logging.error(f"Error durante la inserción: {e}")
+    
+    return documents
 
 def create_indices():
     """Crea índices para mejor rendimiento en consultas."""
@@ -138,7 +129,6 @@ def create_indices():
         collection.create_index([("FILTER", pymongo.ASCENDING)])
         collection.create_index([("INFO", pymongo.ASCENDING)])
         collection.create_index([("FORMAT", pymongo.ASCENDING)])
-        collection.create_index([("output", pymongo.ASCENDING)])
         
         logging.info("Índices creados con éxito")
     except Exception as e:
