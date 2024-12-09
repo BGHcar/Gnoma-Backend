@@ -47,7 +47,7 @@ app.add_middleware(
 # Variables de entorno y configuración
 MONGO_URI = os.getenv("MONGO_URI")
 DATABASE_NAME = os.getenv("DATABASE_NAME")
-NUM_WORKERS = int(os.getenv("NUM_WORKERS")) # Usar todos los hilos disponibles
+NUM_WORKERS = int(os.getenv("MAX_WORKERS")) # Usar todos los hilos disponibles
 BATCH_SIZE = 5  # Bloques más pequeños para mejor distribución
 
 # Cliente MongoDB
@@ -115,7 +115,7 @@ async def get_genome_data(
         for future in futures:
             processed_docs.extend(future.result())
 
-        total_time = time.time() - start_time
+        total_time = round(time.time() - start_time, 5)# Redondear a 5 decimales
         logging.info(f"Query took {total_time:.2f} seconds")
         
         return {
