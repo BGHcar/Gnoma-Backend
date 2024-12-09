@@ -1,0 +1,52 @@
+<!-- templates/welcome.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Welcome Email</title>
+</head>
+<body style="margin: 0; padding: 0; background-color: #f4f4f4; font-family: Arial, sans-serif;">
+    <table border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; overflow: hidden; margin-top: 20px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+        <tr>
+            <td style="background-color: #4F46E5; padding: 30px; text-align: center;">
+                <h1 style="color: #ffffff; margin: 0; font-size: 24px;">Bienvenido, {{ user_name }}!</h1>
+            </td>
+        </tr>
+        <tr>
+            <td style="padding: 40px 30px;">
+                <h2 style="color: #333333; margin-top: 0; margin-bottom: 20px; font-size: 20px;">Gracias por registrarte con nosotros.</h2>
+                <p style="color: #666666; font-size: 16px; line-height: 1.6; margin-bottom: 20px;">
+                    Acabas de dar el primer paso en tu viaje con nosotros. Estamos emocionados de tenerte aquí y queremos asegurarnos de que tengas la mejor experiencia posible.
+                </p>
+                <p style="color: #666666; font-size: 16px; line-height: 1.6; margin-bottom: 30px;">
+                    Aqui tienes tu información de inicio de sesión:
+                </p>
+                <ul style="color: #666666; font-size: 16px; line-height: 1.6; margin-bottom: 30px; padding-left: 20px;">
+                    <li style="margin-bottom: 10px;">Usuario: {{ to_email }}</li>
+                    <li style="margin-bottom: 10px;">Token: {{ token }}</li>
+                </ul>
+                <div style="text-align: center; margin-top: 30px;">
+                    <a href="http://localhost:4200/" style="background-color: #4F46E5; color: #ffffff; text-decoration: none; padding: 12px 30px; border-radius: 5px; font-weight: bold; display: inline-block;">Comenzar Ahora</a>
+                </div>
+            </td>
+        </tr>
+        <tr>
+            <td style="background-color: #f8f8f8; padding: 20px 30px; text-align: center;">
+                <p style="color: #999999; font-size: 14px; margin: 0;">
+                    Indexer Genoma
+                </p>
+                <p style="color: #999999; font-size: 14px; margin: 0;">
+                    {{ company_name }}
+                </p>
+                <p style="color: #999999; font-size: 14px; margin: 0;">
+                    &copy; {{ year }}
+                </p>
+                <p style="color: #999999; font-size: 12px; margin-top: 10px;">
+                    Si no quieres recibir más correos, puedes <a href="#" style="color: #666666;">desuscribirte aquí</a>
+                </p>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>
