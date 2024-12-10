@@ -32,15 +32,20 @@ MONGO_URI = os.getenv("MONGO_URI")
 DATABASE_NAME = os.getenv("DATABASE_NAME")
 
 # MongoDB setup
+# MongoDB setup
 client = pymongo.MongoClient(
     MONGO_URI,
     maxPoolSize=None,
     connectTimeoutMS=30000,
     socketTimeoutMS=None,
     connect=False,
+    w=1,
+    journal=False,
+    maxIdleTimeMS=None,
+    compressors='zlib'
 )
 db = client[DATABASE_NAME]
-collection = db['genomas']
+collection = db.get_collection('genomas', write_concern=pymongo.WriteConcern(w=1, j=False))
 
 def handle_interrupt(signal, frame):
     logging.info("\nProceso cancelado por el usuario.")
@@ -87,40 +92,29 @@ def bulk_insert_mongo(documents: List[Dict], retry_count: int = 3) -> int:
         return 0
         
     operations = [InsertOne(doc) for doc in documents]
-    total_inserted = 0
     
-    for attempt in range(retry_count):
-        try:
-            result = collection.bulk_write(operations, ordered=False)
-            return result.inserted_count
-        except pymongo.errors.BulkWriteError as bwe:
-            # Identificar documentos que fallaron
-            inserted = bwe.details.get('nInserted', 0)
-            total_inserted += inserted
-            
-            if attempt < retry_count - 1:
-                # Reintentar con los documentos que fallaron
-                write_errors = bwe.details.get('writeErrors', [])
-                failed_indexes = {error['index'] for error in write_errors}
-                operations = [
-                    op for i, op in enumerate(operations)
-                    if i in failed_indexes
-                ]
-            else:
-                logging.error(f"Error final en bulk write después de {retry_count} intentos")
-                return total_inserted
-        except Exception as e:
-            logging.error(f"Error no recuperable en bulk write: {e}")
-            return total_inserted
-    
-    return total_inserted
+    try:
+        # Quitar write_concern del bulk_write
+        result = collection.bulk_write(
+            operations, 
+            ordered=False,
+            bypass_document_validation=True
+        )
+        return result.inserted_count
+    except pymongo.errors.BulkWriteError as bwe:
+        inserted = bwe.details.get('nInserted', 0)
+        logging.warning(f"Bulk write parcialmente exitoso: {inserted} documentos insertados")
+        return inserted
+    except Exception as e:
+        logging.error(f"Error en bulk write: {e}")
+        return 0
 
 def process_file_chunk(file_path: str, start_pos: int, end_pos: int, column_positions: Dict[str, int]) -> List[Dict]:
     """
     Procesa un chunk del archivo usando límites exactos.
     """
-    documents = []
-    batch_size = 1000
+    batch_size = 5000  # Aumentar el tamaño del batch
+    total_inserted = 0
     
     with open(file_path, 'rb') as f:
         f.seek(start_pos)
@@ -137,16 +131,18 @@ def process_file_chunk(file_path: str, start_pos: int, end_pos: int, column_posi
                     current_batch.append(document)
                     
                     if len(current_batch) >= batch_size:
-                        documents.extend(current_batch)
+                        inserted = bulk_insert_mongo(current_batch)
+                        total_inserted += inserted
                         current_batch = []
                         
             except Exception as e:
                 logging.error(f"Error procesando línea: {e}")
         
         if current_batch:
-            documents.extend(current_batch)
+            inserted = bulk_insert_mongo(current_batch)
+            total_inserted += inserted
     
-    return documents
+    return total_inserted
 
 def process_file_parallel(file_path: str):
     """
@@ -177,7 +173,9 @@ def process_file_parallel(file_path: str):
     
     # Contador atómico para documentos procesados
     total_processed = Value('i', 0)
-    
+    # Incrementar el tamaño del buffer de lectura
+    buffer_size = 8 * 1024 * 1024  # 8MB buffer
+
     with ProcessPoolExecutor(max_workers=NUM_PROCESSES) as executor:
         futures = []
         for start_pos, end_pos in chunk_boundaries:
@@ -191,36 +189,35 @@ def process_file_parallel(file_path: str):
                 )
             )
         
-        # Monitorear progreso
         completed = 0
-        for future in concurrent.futures.as_completed(futures):
-            try:
-                chunk_documents = future.result()
-                if chunk_documents:
-                    inserted_count = bulk_insert_mongo(chunk_documents)
+        batch_size = 10
+        for i in range(0, len(futures), batch_size):
+            batch_futures = futures[i:i + batch_size]
+            for future in concurrent.futures.as_completed(batch_futures):
+                try:
+                    inserted_count = future.result()
                     with total_processed.get_lock():
                         total_processed.value += inserted_count
-                
-                completed += 1
-                if completed % 10 == 0:
-                    progress = (completed / len(chunk_boundaries)) * 100
-                    elapsed = time.time() - start_time
-                    estimated_total = elapsed / (completed / len(chunk_boundaries))
-                    remaining = estimated_total - elapsed
                     
-                    with total_processed.get_lock():
-                        current_processed = total_processed.value
-                        processed_ratio = current_processed / total_lines * 100
-                    
-                    logging.info(
-                        f"Progreso: {progress:.1f}% - "
-                        f"Documentos procesados: {current_processed} de {total_lines} ({processed_ratio:.1f}%) - "
-                        f"Tiempo transcurrido: {elapsed/60:.1f} minutos - "
-                        f"Tiempo restante estimado: {remaining/60:.1f} minutos"
-                    )
-            except Exception as e:
-                logging.error(f"Error procesando chunk: {e}")
-    
+                    completed += 1
+                    if completed % 5 == 0:  # Reducir la frecuencia de logging
+                        progress = (completed / len(chunk_boundaries)) * 100
+                        elapsed = time.time() - start_time
+                        estimated_total = elapsed / (completed / len(chunk_boundaries))
+                        remaining = estimated_total - elapsed
+                        
+                        with total_processed.get_lock():
+                            current_processed = total_processed.value
+                            processed_ratio = current_processed / total_lines * 100
+                        
+                        logging.info(
+                            f"Progreso: {progress:.1f}% - "
+                            f"Documentos procesados: {current_processed} de {total_lines} ({processed_ratio:.1f}%) - "
+                            f"Tiempo transcurrido: {elapsed/60:.1f} minutos - "
+                            f"Tiempo restante estimado: {remaining/60:.1f} minutos"
+                        )
+                except Exception as e:
+                    logging.error(f"Error procesando chunk: {e}")
     end_time = time.time()
     end_datetime = datetime.now()
     total_time = end_time - start_time
