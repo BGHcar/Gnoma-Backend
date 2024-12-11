@@ -8,10 +8,10 @@ from typing import Any, Dict, List
 from concurrent.futures import ThreadPoolExecutor
 from motor.motor_asyncio import AsyncIOMotorClient
 
+router = APIRouter(prefix="/genome",tags=["Genome Parellel Processing"])
+
 # Configuración básica
 load_dotenv()
-
-router = APIRouter(prefix="/genome",tags=["Genome Parellel Processing"])
 
 logging.basicConfig(
     level=logging.INFO,
@@ -20,6 +20,24 @@ logging.basicConfig(
         logging.FileHandler('genome_processing.log'),
         logging.StreamHandler()
     ]
+)
+
+# Variables de entorno y configuración
+MONGO_URI = os.getenv("MONGO_URI")
+DATABASE_NAME = os.getenv("DATABASE_NAME")
+NUM_WORKERS = 8 #int(os.getenv("MAX_WORKERS", os.cpu_count))  # Usar todos los hilos disponibles
+BATCH_SIZE = 5  # Bloques más pequeños para mejor distribución
+
+
+# Cliente MongoDB optimizado
+client = AsyncIOMotorClient(
+    MONGO_URI,
+    maxPoolSize=50,
+    minPoolSize=20,
+    maxIdleTimeMS=30000,
+    connectTimeoutMS=20000,
+    retryWrites=True,
+    compressors=['zlib']
 )
 
 class GenomeDocument:
@@ -35,22 +53,7 @@ class GenomeDocument:
         self.FORMAT = doc.get('FORMAT')
         self.outputs = {k: v for k, v in doc.items() if k.startswith('output_')}
 
-app = FastAPI()
 
-# Configuración CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Variables de entorno y configuración
-MONGO_URI = os.getenv("MONGO_URI")
-DATABASE_NAME = os.getenv("DATABASE_NAME")
-NUM_WORKERS = int(os.getenv("MAX_WORKERS", os.cpu_count))  # Usar todos los hilos disponibles
-BATCH_SIZE = 5  # Bloques más pequeños para mejor distribución
 
 # Cliente MongoDB
 client = AsyncIOMotorClient(MONGO_URI)

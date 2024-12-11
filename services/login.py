@@ -36,7 +36,7 @@ def create_token(data: dict):
     expire = datetime.utcnow() + timedelta(hours=1)
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    logging.info("Token Generado: ", encoded_jwt)
+    logging.info(f"Token Generado: {encoded_jwt}")
     return encoded_jwt
 
 def send_welcome_email(to_email, user_name):
