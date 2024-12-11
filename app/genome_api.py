@@ -1,6 +1,6 @@
 import time
 import os
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 import logging
 from dotenv import load_dotenv
@@ -10,6 +10,8 @@ from motor.motor_asyncio import AsyncIOMotorClient
 
 # Configuración básica
 load_dotenv()
+
+router = APIRouter(prefix="/genome",tags=["Genome Parellel Processing"])
 
 logging.basicConfig(
     level=logging.INFO,
@@ -134,7 +136,7 @@ async def get_genome_data(
             detail=f"Error processing request: {str(e)}"
         )
 
-@app.on_event("startup")
+@router.on_event("startup")
 async def startup_event():
     try:
         await db.command("ping")
@@ -143,7 +145,7 @@ async def startup_event():
         logging.error(f"Error durante la inicialización: {str(e)}")
         raise
 
-@app.get("/genome/all")
+@router.get("/all")
 async def root(
     filter: str = "CHROM",
     search: str = "",
@@ -152,7 +154,7 @@ async def root(
 ):
     return await get_genome_data(filter, search, page, page_size)
 
-@app.get("/genome/search")
+@router.get("/search")
 async def search_variants(
     filter: str = "CHROM",
     search: str = "",
@@ -161,7 +163,7 @@ async def search_variants(
 ):
     return await get_genome_data(filter, search, page, page_size)
 
-@app.on_event("shutdown")
+@router.on_event("shutdown")
 async def shutdown_event():
     thread_pool.shutdown(wait=True)
     client.close()

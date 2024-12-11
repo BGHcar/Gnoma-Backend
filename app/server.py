@@ -1,9 +1,9 @@
 import asyncio
-from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException
+from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 import os
 from dotenv import load_dotenv
-from process_file import process_file_parallel
+from app.process_file import process_file_parallel
 import pymongo
 import logging
 from bson import ObjectId
@@ -14,6 +14,8 @@ import time
 
 # Asegurar que existe el directorio de logs
 os.makedirs('logs', exist_ok=True)
+
+router = APIRouter(prefix="",tags=["server"])
 
 # Configurar logging
 logging.basicConfig(
@@ -122,11 +124,12 @@ def process_chunk(process_id, skip, limit, query, sort_by, sort_order, max_worke
 def parallel_process_file(file_path):
     process_file_parallel(file_path)
 
-@app.post("/process_file")
+@router.post("/process_file")
 async def process_file(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...)
 ):
+    """Procesa un archivo VCF en segundo plano"""
     start_time = time.time()
     try:
         with tempfile.NamedTemporaryFile(
@@ -174,13 +177,6 @@ async def process_file(
             "process_time": round(time.time() - start_time, 3)
         }
 
-@app.get("/")
-async def root():
-    start_time = time.time()
-    return {
-        "message": "FastAPI server running correctly.",
-        "process_time": round(time.time() - start_time, 3)
-    }
 
 async def get_variants_parallel(query=None, sort_by="_id", sort_order=1, page=1, page_size=10, hint=None):
     docs_per_process = max(1, page_size // NUM_PROCESSES)
