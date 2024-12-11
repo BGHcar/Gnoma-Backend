@@ -7,12 +7,11 @@ from dotenv import load_dotenv
 from typing import Any, Dict, List
 from concurrent.futures import ThreadPoolExecutor
 from motor.motor_asyncio import AsyncIOMotorClient
-import asyncio
+
+router = APIRouter(prefix="/genome",tags=["Genome Parellel Processing"])
 
 # Configuración básica
 load_dotenv()
-
-router = APIRouter(prefix="/genome",tags=["Genome Parellel Processing"])
 
 logging.basicConfig(
     level=logging.INFO,
@@ -21,6 +20,24 @@ logging.basicConfig(
         logging.FileHandler('genome_processing.log'),
         logging.StreamHandler()
     ]
+)
+
+# Variables de entorno y configuración
+MONGO_URI = os.getenv("MONGO_URI")
+DATABASE_NAME = os.getenv("DATABASE_NAME")
+NUM_WORKERS = 8 #int(os.getenv("MAX_WORKERS", os.cpu_count))  # Usar todos los hilos disponibles
+BATCH_SIZE = 5  # Bloques más pequeños para mejor distribución
+
+
+# Cliente MongoDB optimizado
+client = AsyncIOMotorClient(
+    MONGO_URI,
+    maxPoolSize=50,
+    minPoolSize=20,
+    maxIdleTimeMS=30000,
+    connectTimeoutMS=20000,
+    retryWrites=True,
+    compressors=['zlib']
 )
 
 class GenomeDocument:
@@ -36,37 +53,19 @@ class GenomeDocument:
         self.FORMAT = doc.get('FORMAT')
         self.outputs = {k: v for k, v in doc.items() if k.startswith('output_')}
 
-app = FastAPI()
 
-# Configuración CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Variables de entorno y configuración
-MONGO_URI = os.getenv("MONGO_URI")
-DATABASE_NAME = os.getenv("DATABASE_NAME")
-NUM_WORKERS = int(os.getenv("MAX_WORKERS", "16"))
 
 # Cliente MongoDB
 client = AsyncIOMotorClient(MONGO_URI)
 db = client[DATABASE_NAME]
 collection = db[DATABASE_NAME]
 
-# Pool de threads global
-thread_pool = None
+# Pool de threads optimizado para 16 hilos
+thread_pool = ThreadPoolExecutor(max_workers=NUM_WORKERS)
 
-async def process_documents_chunk(chunk: List[Dict]) -> List[GenomeDocument]:
-    """Procesa un chunk de documentos en un thread separado"""
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(
-        thread_pool,
-        lambda: [GenomeDocument(doc) for doc in chunk]
-    )
+def process_batch(documents: List[Dict]) -> List[GenomeDocument]:
+    """Procesa un batch pequeño de documentos"""
+    return [GenomeDocument(doc) for doc in documents]
 
 async def get_genome_data(
     filter: str = "CHROM",
@@ -74,46 +73,65 @@ async def get_genome_data(
     page: int = 1,
     page_size: int = 10
 ) -> Dict:
+    """Función principal con procesamiento altamente paralelo"""
     try:
         start_time = time.time()
-        query = {filter: {"$regex": search, "$options": "i"}} if search else {}
         
-        # Optimizar la query usando hint y sort
-        cursor = collection.find(query).hint([(filter, 1)]).sort(filter, 1)
+        # Validar página y tamaño de página
+        if page_size < 5 or page_size > 100:
+            raise HTTPException(
+                status_code=400,
+                detail="page_size must be between 5 and 100"
+            )
         
-        # Aplicar paginación
-        cursor = cursor.skip((page - 1) * page_size).limit(page_size)
-        documents = await cursor.to_list(length=page_size)
+        # Construir query
+        query = {filter: {"$regex": search, "$options": "i"}}
+        skip = (page - 1) * page_size
         
+        # Obtener documentos
+        cursor = collection.find(query).hint([(filter, 1)]).sort(filter, 1).skip(skip).limit(page_size)
+        documents = []
+        async for doc in cursor:
+            documents.append(doc)
+
         if not documents:
             return {
                 "data": [],
                 "total": 0,
+                "page": page,
+                "page_size": page_size,
+                "total_pages": 0,
                 "process_time": time.time() - start_time
             }
 
-        # Calcular tamaño óptimo de chunks basado en el número de documentos
-        chunk_size = max(1, min(len(documents) // NUM_WORKERS, 20))
-        chunks = [documents[i:i + chunk_size] for i in range(0, len(documents), chunk_size)]
-        
-        # Procesar chunks en paralelo
-        tasks = [process_documents_chunk(chunk) for chunk in chunks]
-        processed_chunks = await asyncio.gather(*tasks)
-        
-        # Aplanar los resultados
-        processed_docs = [doc for chunk in processed_chunks for doc in chunk]
-        
-        # Obtener el total de documentos de forma asíncrona
-        total_docs = await collection.count_documents(query)
-        
-        process_time = time.time() - start_time
-        logging.info(f"Query processed in {process_time:.3f} seconds")
+        # Dividir en batches muy pequeños
+        num_docs = len(documents)
+        batch_size = max(1, min(BATCH_SIZE, num_docs // NUM_WORKERS))
+        batches = [documents[i:i + batch_size] for i in range(0, num_docs, batch_size)]
+
+        # Procesar todos los batches en paralelo
+        futures = []
+        for batch in batches:
+            future = thread_pool.submit(process_batch, batch)
+            futures.append(future)
+
+        # Recolectar resultados manteniendo el orden
+        processed_docs = []
+        for future in futures:
+            processed_docs.extend(future.result())
+
+        total_time = time.time() - start_time
+        logging.info(f"Query took {total_time:.2f} seconds")
         
         return {
             "data": processed_docs,
-            "total": total_docs,
-            "process_time": process_time
+            "total": len(processed_docs),
+            "page": page,
+            "page_size": page_size,
+            "total_pages": page,  # Simplificado para evitar count innecesario
+            "process_time": total_time
         }
+        
     except Exception as e:
         logging.error(f"Error in get_genome_data: {str(e)}")
         raise HTTPException(
@@ -124,17 +142,8 @@ async def get_genome_data(
 @router.on_event("startup")
 async def startup_event():
     try:
-        global thread_pool
-        thread_pool = ThreadPoolExecutor(max_workers=NUM_WORKERS)
-        
-        # Verificar conexión a MongoDB
         await db.command("ping")
         logging.info(f"Conexión exitosa a la base de datos {DATABASE_NAME}")
-        
-        # Asegurar que tenemos el índice necesario
-        await db[DATABASE_NAME].create_index([("CHROM", 1)])
-        logging.info("Índices verificados")
-        
     except Exception as e:
         logging.error(f"Error durante la inicialización: {str(e)}")
         raise
@@ -159,6 +168,5 @@ async def search_variants(
 
 @router.on_event("shutdown")
 async def shutdown_event():
-    if thread_pool:
-        thread_pool.shutdown(wait=True)
+    thread_pool.shutdown(wait=True)
     client.close()

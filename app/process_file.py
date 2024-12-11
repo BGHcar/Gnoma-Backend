@@ -26,8 +26,8 @@ logging.basicConfig(
 
 load_dotenv()
 
-NUM_PROCESSES = int(os.getenv("NUM_PROCESSES", os.cpu_count()))
-CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", 10000))
+NUM_PROCESSES = 8 # int(os.getenv("NUM_PROCESSES", os.cpu_count()))
+CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", 50000))
 MONGO_URI = os.getenv("MONGO_URI")
 DATABASE_NAME = os.getenv("DATABASE_NAME")
 
